@@ -1,0 +1,10 @@
+# Test-only dependencies — not needed in the production Docker image
+# (backend/Dockerfile only installs requirements.txt). See CLAUDE.md's Testing
+# section for how to run the suite.
+-r requirements.txt
+pytest==9.1.1
+pytest-mock==3.15.1
+# test_tools.py imports this directly to verify pdf-to-docx output content —
+# only ever present transitively via pdf2docx otherwise, so pin it explicitly
+# rather than relying on that being incidental.
+python-docx==1.2.0

@@ -1,0 +1,88 @@
+name: CI
+
+# Runs on every PR into main (gating merge — see the branch protection note in
+# CLAUDE.md's CI/CD section) and again on push to main as a safety net. This
+# workflow only runs checks; it never deploys anything — Render's own git-based
+# auto-deploy (see render.yaml) is still what ships main to production, and is
+# unaffected by whether this workflow exists or passes.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: documentos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - name: Run pytest
+        env:
+          # A disposable Postgres service container, not the real Supabase
+          # instance — see CLAUDE.md's Testing section.
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/documentos_test
+        run: pytest
+
+  frontend-checks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build
+
+  frontend-e2e:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+      - name: Run Playwright e2e tests
+        # No live backend needed — every backend call is mocked with
+        # page.route() (see frontend/e2e/helpers.ts and CLAUDE.md's Testing
+        # section). CI=true is set automatically by GitHub Actions, which
+        # makes playwright.config.ts's webServer always start a fresh dev
+        # server here instead of trying to reuse one.
+        run: npx playwright test
