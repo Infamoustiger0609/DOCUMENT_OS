@@ -20,7 +20,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!loading && user) {
-      router.replace("/");
+      router.replace("/home");
     }
   }, [loading, user, router]);
 
@@ -30,7 +30,7 @@ export default function LoginPage() {
     setError(null);
     try {
       await login(email, password);
-      router.push("/");
+      router.push("/home");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed.");
     } finally {

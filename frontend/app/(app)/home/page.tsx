@@ -14,12 +14,14 @@ import {
   formatDate,
   formatRelativeDeadline,
   getDeadlineUrgency,
-} from "./documents/types";
+} from "../documents/types";
 
 // Phase 27 — replaces the old bare backend-health-check page (see CLAUDE.md's
-// Navigation section). A glanceable summary only: stat tiles plus two short
-// lists, each linking out to the real full view (Documents/Tasks) rather than
-// trying to be a second copy of either table.
+// Navigation section). Moved from "/" to "/home" when the public marketing
+// landing page took over the root route — see CLAUDE.md's Frontend pages
+// section. A glanceable summary only: stat tiles plus two short lists, each
+// linking out to the real full view (Documents/Tasks) rather than trying to
+// be a second copy of either table.
 const RECENT_LIMIT = 5;
 const UPCOMING_LIMIT = 5;
 

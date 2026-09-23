@@ -12,7 +12,7 @@ test("logs in with valid credentials and redirects to home", async ({ page }) =>
   await page.getByLabel("Password").fill("testpass123");
   await page.getByRole("button", { name: "Log in" }).click();
 
-  await expect(page).toHaveURL("/");
+  await expect(page).toHaveURL("/home");
 });
 
 test("shows the backend's error message on invalid credentials", async ({ page }) => {

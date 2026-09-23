@@ -19,7 +19,7 @@ function getInitials(name: string): string {
 // exactly as before, just reached via the "Upload document" button on the
 // Documents page now instead of its own sidebar entry.
 const NAV_ITEMS = [
-  { label: "Home", href: "/", icon: Home },
+  { label: "Home", href: "/home", icon: Home },
   { label: "Editing Workspace", href: "/workspace", icon: Bot },
   { label: "Documents", href: "/documents", icon: Folder },
   { label: "Tasks", href: "/tasks", icon: Calendar },
@@ -42,10 +42,12 @@ export function Sidebar() {
 
       <nav className="flex flex-col gap-1 px-3">
         {NAV_ITEMS.map((item) => {
-          // "/" would otherwise match every route via startsWith — only ever
-          // active on an exact match; every other item still prefix-matches
-          // (e.g. /documents/{id} keeps Documents highlighted).
-          const active = item.href === "/" ? pathname === "/" : pathname?.startsWith(item.href);
+          // Prefix match so a sub-route (e.g. /documents/{id}) keeps its
+          // parent nav item highlighted too. The public landing page lives
+          // at "/" now (outside this sidebar entirely — see CLAUDE.md's
+          // Frontend pages section), so no item's href is "/" anymore and
+          // there's no risk of one href prefix-matching every route.
+          const active = pathname?.startsWith(item.href);
           const Icon = item.icon;
           return (
             <Link

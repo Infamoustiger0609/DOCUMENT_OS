@@ -21,7 +21,7 @@ export default function RegisterPage() {
 
   useEffect(() => {
     if (!loading && user) {
-      router.replace("/");
+      router.replace("/home");
     }
   }, [loading, user, router]);
 
@@ -31,7 +31,7 @@ export default function RegisterPage() {
     setError(null);
     try {
       await register(email, password, name);
-      router.push("/");
+      router.push("/home");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed.");
     } finally {
