@@ -4,10 +4,10 @@ import { PanelRightClose, Send, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 
+import { ChatBubble } from "@/components/chat-bubble";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/lib/auth-context";
-import { cn } from "@/lib/utils";
 
 // Persistent, global — mounted once in app/(app)/layout.tsx (not per-page),
 // so its conversation survives client-side navigation between /documents,
@@ -169,20 +169,7 @@ export function CopilotPanel() {
           </div>
         ) : (
           messages.map((message, index) => (
-            <div
-              key={index}
-              className={cn("flex flex-col gap-1.5", message.role === "user" ? "items-end" : "items-start")}
-            >
-              <div
-                className={cn(
-                  "max-w-[95%] whitespace-pre-wrap rounded-xl px-3.5 py-2.5 text-sm leading-relaxed",
-                  message.role === "user"
-                    ? "rounded-br-sm bg-ink text-paper"
-                    : "rounded-bl-sm bg-sidebar-bg text-ink"
-                )}
-              >
-                {message.content}
-              </div>
+            <ChatBubble key={index} role={message.role} content={message.content}>
               {message.citations && message.citations.length > 0 && (
                 <div className="flex w-[95%] flex-col gap-1.5">
                   {message.citations.map((citation) => (
@@ -190,7 +177,7 @@ export function CopilotPanel() {
                   ))}
                 </div>
               )}
-            </div>
+            </ChatBubble>
           ))
         )}
         {sending && (

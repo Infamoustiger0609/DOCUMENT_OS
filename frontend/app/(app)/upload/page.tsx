@@ -1,10 +1,10 @@
 "use client";
 
-import { CheckCircle2, Circle, UploadCloud, XCircle } from "lucide-react";
+import { CheckCircle2, Circle, XCircle } from "lucide-react";
 import { type ChangeEvent, type DragEvent, useCallback, useEffect, useRef, useState } from "react";
 
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { DropzoneBox, UploadProgressCard } from "@/components/upload-dropzone";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
 
@@ -304,53 +304,20 @@ export default function UploadPage() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[58%_42%]">
         <div className="flex flex-col gap-6">
-          <div
+          <DropzoneBox
+            isDragging={isDragging}
             onDragOver={(event) => {
               event.preventDefault();
               setIsDragging(true);
             }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleDrop}
-            className={cn(
-              "relative flex flex-col items-center justify-center gap-3 overflow-hidden rounded-lg border-2 border-dashed bg-paper-raised px-6 py-16 text-center transition-colors",
-              isDragging ? "border-filed" : "border-line"
-            )}
-          >
-            <div
-              className="pointer-events-none absolute inset-0"
-              style={{
-                backgroundImage:
-                  "radial-gradient(circle at 50% 35%, rgba(63,102,89,0.12) 0%, transparent 55%)",
-              }}
-            />
-            <UploadCloud className="relative z-10 h-9 w-9 text-ink-soft" strokeWidth={1.5} />
-            <p className="relative z-10 text-sm text-ink">Drop a document, or browse your files</p>
-            <p className="relative z-10 text-xs text-muted">PDF, JPG, PNG, TIFF — up to 20MB</p>
-            <Button
-              type="button"
-              variant="outline"
-              className="relative z-10 mt-2"
-              onClick={() => inputRef.current?.click()}
-            >
-              Choose file
-            </Button>
-            <input
-              ref={inputRef}
-              type="file"
-              accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff"
-              className="hidden"
-              onChange={handleFileChange}
-            />
-          </div>
+            onChooseFile={() => inputRef.current?.click()}
+            fileInputRef={inputRef}
+            onFileChange={handleFileChange}
+          />
 
-          {state === "uploading" && (
-            <Card className="flex flex-col gap-2 p-5">
-              <div className="h-2 w-full overflow-hidden rounded-full bg-sidebar-bg">
-                <div className="h-full bg-ink transition-all" style={{ width: `${progress}%` }} />
-              </div>
-              <span className="text-xs tabular-nums text-ink-soft">Uploading — {progress}%</span>
-            </Card>
-          )}
+          {state === "uploading" && <UploadProgressCard progress={progress} />}
 
           {state === "error" && message && (
             <p className="rounded-md bg-overdue/10 px-3 py-2 text-sm text-overdue">{message}</p>

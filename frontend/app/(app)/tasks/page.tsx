@@ -1,9 +1,14 @@
 "use client";
 
-import { ChevronRight } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import {
+  BUCKET_DOT_CLASSES,
+  BUCKET_LABEL_CLASSES,
+  BUCKET_TITLES,
+  DeadlineRow,
+} from "@/components/deadline-row";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
 
@@ -11,93 +16,10 @@ import {
   type DeadlineBucket,
   DEFAULT_DUE_SOON_THRESHOLD_DAYS,
   DocumentRow,
-  formatDate,
-  formatRelativeDeadline,
   getDeadlineBucket,
-  getPartySummary,
 } from "../documents/types";
 
 const BUCKET_ORDER: DeadlineBucket[] = ["overdue", "due-this-week", "due-this-month"];
-
-// "Due this month" would be misleading once the threshold is configurable (e.g.
-// 60 days is ~2 months, 7 days collapses this bucket entirely) — "Due soon"
-// stays accurate regardless of the chosen threshold.
-const BUCKET_TITLES: Record<DeadlineBucket, string> = {
-  overdue: "Overdue",
-  "due-this-week": "Due this week",
-  "due-this-month": "Due soon",
-  later: "Later",
-};
-
-const BUCKET_DOT_CLASSES: Record<DeadlineBucket, string> = {
-  overdue: "bg-overdue",
-  "due-this-week": "bg-due-soon",
-  "due-this-month": "bg-ink-soft",
-  later: "bg-ink-soft",
-};
-
-const BUCKET_LABEL_CLASSES: Record<DeadlineBucket, string> = {
-  overdue: "text-overdue",
-  "due-this-week": "text-due-soon",
-  "due-this-month": "text-ink-soft",
-  later: "text-ink-soft",
-};
-
-const BUCKET_PILL_CLASSES: Record<DeadlineBucket, string> = {
-  overdue: "bg-overdue/10 text-overdue",
-  "due-this-week": "bg-due-soon/10 text-due-soon",
-  "due-this-month": "bg-sidebar-bg text-ink-soft",
-  later: "bg-sidebar-bg text-ink-soft",
-};
-
-function DeadlineRow({
-  doc,
-  bucket,
-  onOpen,
-  thresholdDays,
-}: {
-  doc: DocumentRow;
-  bucket: DeadlineBucket;
-  onOpen: (doc: DocumentRow) => void;
-  thresholdDays: number;
-}) {
-  const relative = formatRelativeDeadline(doc.deadline_date, thresholdDays);
-  const party = getPartySummary(doc);
-  const dateLabel =
-    bucket === "overdue"
-      ? `Expired ${formatDate(doc.deadline_date)}`
-      : `Due ${formatDate(doc.deadline_date)}`;
-
-  return (
-    <button
-      type="button"
-      onClick={() => onOpen(doc)}
-      className="flex w-full items-center gap-4 px-5 py-3.5 text-left transition-colors hover:bg-sidebar-bg/40"
-    >
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-semibold text-ink">{doc.filename}</p>
-        <p className="truncate text-xs text-ink-soft">
-          {doc.category ?? "Uncategorized"}
-          {party && ` · ${party}`}
-        </p>
-      </div>
-      <span className="hidden w-36 shrink-0 text-sm tabular-nums text-ink sm:block">
-        {dateLabel}
-      </span>
-      <span className="flex w-32 shrink-0 justify-end">
-        <span
-          className={cn(
-            "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold",
-            BUCKET_PILL_CLASSES[bucket]
-          )}
-        >
-          {relative}
-        </span>
-      </span>
-      <ChevronRight className="h-4 w-4 shrink-0 text-ink-soft" strokeWidth={2} />
-    </button>
-  );
-}
 
 function BucketSection({
   bucket,
