@@ -4,7 +4,7 @@
 // separate component/file from the rest of workspace/page.tsx's tool picker:
 // this is a genuinely distinct workflow (learn a field structure once, reuse
 // it to generate brand-new documents), not another /tools/* transformation.
-import { FileText, Loader2, Plus, Sparkles, Trash2, UploadCloud, X } from "lucide-react";
+import { Download, Eye, FileText, Loader2, Plus, Sparkles, Trash2, UploadCloud, X } from "lucide-react";
 import Link from "next/link";
 import { type ChangeEvent, type FormEvent, useCallback, useEffect, useState } from "react";
 
@@ -13,7 +13,10 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/lib/auth-context";
+import { downloadSignedFile } from "@/lib/download";
 import { cn } from "@/lib/utils";
+
+import { formatDate } from "../documents/types";
 
 type FieldType = "string" | "number" | "date";
 
@@ -281,7 +284,15 @@ function FieldsSectionEditor({
   );
 }
 
-function GeneratePanel({ template, onClose }: { template: TemplateSummary; onClose: () => void }) {
+function GeneratePanel({
+  template,
+  onClose,
+  onGenerated,
+}: {
+  template: TemplateSummary;
+  onClose: () => void;
+  onGenerated: () => void;
+}) {
   const { authFetch } = useAuth();
   const [mode, setMode] = useState<"form" | "describe">("form");
   const [values, setValues] = useState<FormValues>(() => buildEmptyValues(template.field_schema));
@@ -313,6 +324,7 @@ function GeneratePanel({ template, onClose }: { template: TemplateSummary; onClo
       }
       const data: { id: string } = await res.json();
       setGeneratedDocId(data.id);
+      onGenerated();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not generate a document.");
     } finally {
@@ -384,7 +396,10 @@ function GeneratePanel({ template, onClose }: { template: TemplateSummary; onClo
       {generatedDocId ? (
         <div className="flex items-center justify-between gap-3 rounded-md bg-filed/10 px-3 py-2.5">
           <span className="text-sm text-filed">Document generated.</span>
-          <Link href={`/documents/${generatedDocId}`} className="text-sm font-medium text-ink underline underline-offset-2">
+          <Link
+            href={`/documents/${generatedDocId}?from=workspace`}
+            className="text-sm font-medium text-ink underline underline-offset-2"
+          >
             View document
           </Link>
         </div>
@@ -398,6 +413,125 @@ function GeneratePanel({ template, onClose }: { template: TemplateSummary; onClo
   );
 }
 
+// --- Uploaded Templates / Generated Documents sections ----------------------
+// Both are ordinary `documents` rows under the hood (a template-learning
+// sample from POST /templates/learn-from-sample, or a template-generated
+// output from POST /templates/{id}/generate) — see CLAUDE.md's "Document
+// source separation" section for why they're marked with a `source` field
+// and kept out of the main Documents list, surfacing only here instead.
+
+interface SourceDocument {
+  id: string;
+  filename: string;
+  upload_date: string;
+}
+
+function OpenDocumentButton({ id, filename }: { id: string; filename: string }) {
+  return (
+    <Link
+      href={`/documents/${id}?from=workspace`}
+      title={`Open ${filename}`}
+      aria-label={`Open ${filename}`}
+      className="rounded-md p-1.5 text-ink-soft hover:bg-sidebar-bg hover:text-ink"
+    >
+      <Eye className="h-3.5 w-3.5" strokeWidth={1.75} />
+    </Link>
+  );
+}
+
+function DownloadDocumentButton({ id, filename }: { id: string; filename: string }) {
+  const { authFetch } = useAuth();
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      await downloadSignedFile(authFetch, `/documents/${id}/download-url`, filename);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Could not download the file.");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleDownload}
+      disabled={downloading}
+      title={`Download ${filename}`}
+      aria-label={`Download ${filename}`}
+      className="rounded-md p-1.5 text-ink-soft hover:bg-sidebar-bg hover:text-ink disabled:opacity-50"
+    >
+      <Download className="h-3.5 w-3.5" strokeWidth={1.75} />
+    </button>
+  );
+}
+
+function SourceDocumentsCard({
+  title,
+  emptyMessage,
+  endpoint,
+  refreshKey,
+}: {
+  title: string;
+  emptyMessage: string;
+  endpoint: string;
+  refreshKey: number;
+}) {
+  const { authFetch } = useAuth();
+  const [documents, setDocuments] = useState<SourceDocument[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const res = await authFetch(endpoint);
+        if (res.ok && !cancelled) setDocuments(await res.json());
+      } catch {
+        // Non-fatal — the rest of the workspace still works if this list fails to load.
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authFetch, endpoint, refreshKey]);
+
+  return (
+    <Card className="flex flex-col gap-3 p-5">
+      <h2 className="text-sm font-semibold text-ink">{title}</h2>
+      {loading ? (
+        <p className="text-sm text-ink-soft">Loading...</p>
+      ) : documents.length === 0 ? (
+        <p className="text-sm text-ink-soft">{emptyMessage}</p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {documents.map((doc) => (
+            <div
+              key={doc.id}
+              className="flex items-center justify-between gap-3 rounded-md border border-line bg-paper px-3 py-2.5"
+            >
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate text-sm text-ink">{doc.filename}</span>
+                <span className="text-xs text-ink-soft">{formatDate(doc.upload_date)}</span>
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                <OpenDocumentButton id={doc.id} filename={doc.filename} />
+                <DownloadDocumentButton id={doc.id} filename={doc.filename} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 // --- Root panel --------------------------------------------------------------
 
 export default function TemplatesPanel() {
@@ -406,6 +540,11 @@ export default function TemplatesPanel() {
   const [loading, setLoading] = useState(true);
   const [activeTemplateId, setActiveTemplateId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Bumped after a new sample is learned or a new document is generated, so
+  // the "Uploaded Templates"/"Generated Documents" lists below re-fetch and
+  // pick up the new row without a full page reload.
+  const [sampleDocsRefreshKey, setSampleDocsRefreshKey] = useState(0);
+  const [generatedDocsRefreshKey, setGeneratedDocsRefreshKey] = useState(0);
 
   const loadTemplates = useCallback(async () => {
     setLoading(true);
@@ -443,7 +582,12 @@ export default function TemplatesPanel() {
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <div className="flex flex-col gap-6">
-        <CreateTemplateCard onCreated={(template) => setTemplates((prev) => [template, ...prev])} />
+        <CreateTemplateCard
+          onCreated={(template) => {
+            setTemplates((prev) => [template, ...prev]);
+            setSampleDocsRefreshKey((k) => k + 1);
+          }}
+        />
 
         <Card className="flex flex-col gap-3 p-5">
           <h2 className="text-sm font-semibold text-ink">Your templates</h2>
@@ -499,11 +643,29 @@ export default function TemplatesPanel() {
             </div>
           )}
         </Card>
+
+        <SourceDocumentsCard
+          title="Uploaded Templates"
+          emptyMessage="No sample documents yet — learning a template from a sample uploads it here."
+          endpoint="/documents/templates"
+          refreshKey={sampleDocsRefreshKey}
+        />
+
+        <SourceDocumentsCard
+          title="Generated Documents"
+          emptyMessage="No generated documents yet — generate one from a template to see it here."
+          endpoint="/documents/generated"
+          refreshKey={generatedDocsRefreshKey}
+        />
       </div>
 
       <div>
         {activeTemplate ? (
-          <GeneratePanel template={activeTemplate} onClose={() => setActiveTemplateId(null)} />
+          <GeneratePanel
+            template={activeTemplate}
+            onClose={() => setActiveTemplateId(null)}
+            onGenerated={() => setGeneratedDocsRefreshKey((k) => k + 1)}
+          />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line bg-paper-raised px-6 py-16 text-center">
             <Sparkles className="h-6 w-6 text-ink-soft" strokeWidth={1.5} />

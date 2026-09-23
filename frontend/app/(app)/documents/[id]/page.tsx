@@ -11,7 +11,7 @@ import {
   Trash2,
 } from "lucide-react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -938,6 +938,14 @@ function ReprocessBanner({
 export default function DocumentDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // A template-learning sample or a template-generated document (see
+  // CLAUDE.md's "Document source separation" section) is opened from the
+  // Editing Workspace's own "Uploaded Templates"/"Generated Documents"
+  // sections via `?from=workspace` — the back link and post-delete redirect
+  // should return there instead of the main Documents list.
+  const returnTo = searchParams.get("from") === "workspace" ? "/workspace" : "/documents";
+  const returnLabel = returnTo === "/workspace" ? "Editing Workspace" : "Documents";
   const { authFetch, user } = useAuth();
   const thresholdDays = user?.due_soon_threshold_days ?? DEFAULT_DUE_SOON_THRESHOLD_DAYS;
   const [doc, setDoc] = useState<DocumentRow | null>(null);
@@ -978,7 +986,7 @@ export default function DocumentDetailPage() {
     try {
       const res = await authFetch(`/documents/${doc.id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Delete failed");
-      router.push("/documents");
+      router.push(returnTo);
     } catch {
       setDeleteError("Could not delete the document. Please try again.");
       setDeleting(false);
@@ -987,11 +995,11 @@ export default function DocumentDetailPage() {
 
   const BackLink = (
     <Link
-      href="/documents"
+      href={returnTo}
       className="flex w-fit items-center gap-1.5 text-sm font-medium text-ink-soft hover:text-ink"
     >
       <ArrowLeft className="h-3.5 w-3.5" strokeWidth={2} />
-      Documents
+      {returnLabel}
     </Link>
   );
 
