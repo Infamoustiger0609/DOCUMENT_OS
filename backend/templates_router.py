@@ -74,13 +74,15 @@ async def learn_from_sample(
     current_user: User = Depends(get_current_user),
 ):
     """Uploads the sample the same way POST /documents/upload does (so it's a
-    real, ordinary Document the user can see/reprocess/delete like any
-    other), then — synchronously, not backgrounded — extracts its text and
-    classifies it, same functions the main pipeline uses (extraction.py,
-    classification.py), just without the structured-extraction step (which
-    would extract this ONE sample's values, not its reusable structure).
-    Synchronous because the caller needs the learned schema back in this
-    same response, not via polling."""
+    real, ordinary Document the user can reprocess/delete like any other),
+    then — synchronously, not backgrounded — extracts its text and classifies
+    it, same functions the main pipeline uses (extraction.py, classification.py),
+    just without the structured-extraction step (which would extract this ONE
+    sample's values, not its reusable structure). Synchronous because the
+    caller needs the learned schema back in this same response, not via
+    polling. Marked source="template_sample" so it's excluded from GET
+    /documents (see CLAUDE.md's "Document source separation" section) —
+    still visible via GET /documents/templates and the document detail page."""
     extension = Path(file.filename or "").suffix.lower()
     if extension not in ALLOWED_EXTENSIONS:
         raise HTTPException(
@@ -102,7 +104,11 @@ async def learn_from_sample(
     upload_file_to_storage(contents, object_key, content_type=ALLOWED_EXTENSIONS[extension])
 
     document = Document(
-        filename=file.filename, storage_path=object_key, status="uploaded", user_id=current_user.id
+        filename=file.filename,
+        storage_path=object_key,
+        status="uploaded",
+        user_id=current_user.id,
+        source="template_sample",
     )
     db.add(document)
     db.commit()
@@ -240,8 +246,10 @@ def generate_document(
     never a values-extraction step to skip), so it lands directly on
     status="processed" with extracted_json/raw_text/deadline_date all
     populated in this same request — no background pipeline, no polling.
-    This means a generated document is immediately visible in /documents,
-    downloadable via the existing GET /documents/{id}/download-url,
+    Marked source="generated" so it's excluded from the main GET /documents
+    list (see CLAUDE.md's "Document source separation" section) — instead
+    visible via GET /documents/generated (the Editing Workspace's own list).
+    It's still downloadable via the existing GET /documents/{id}/download-url,
     chattable via the existing POST /documents/{id}/chat (raw_text is a
     plain-text rendering of its own values), and searchable via the
     Copilot's full-text search — all for free, no new code path needed."""
@@ -320,6 +328,7 @@ def generate_document(
         extracted_json=extracted_json,
         deadline_date=guess_deadline_date(values),
         generated_from_template_id=template.id,
+        source="generated",
     )
     db.add(document)
     db.commit()

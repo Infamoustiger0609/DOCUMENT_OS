@@ -343,7 +343,15 @@ def get_documents(
     if cached is not None:
         return cached
 
-    query = db.query(Document).filter(Document.user_id == current_user.id)
+    # source == "upload" excludes template-learning samples and
+    # template-generated documents (see CLAUDE.md's "Document source
+    # separation" section) — those belong only in the Editing Workspace's
+    # own "Uploaded Templates"/"Generated Documents" lists (GET
+    # /documents/templates, GET /documents/generated), never the main
+    # "My Documents" registry.
+    query = db.query(Document).filter(
+        Document.user_id == current_user.id, Document.source == "upload"
+    )
     if category:
         query = query.filter(Document.category == category)
     if upload_date_from:
@@ -390,6 +398,41 @@ def get_document_deadlines(
     ]
     deadlines_cache.set(cache_key, documents)
     return documents
+
+
+# Registered before /documents/{document_id} so these literal paths are never
+# swallowed as a {document_id} value — same reasoning as /documents/deadlines
+# above. Power the Editing Workspace's "Uploaded Templates"/"Generated
+# Documents" sections (see CLAUDE.md's "Document source separation" section).
+# Not cached like GET /documents/GET /documents/deadlines — these are small,
+# infrequently-viewed lists scoped to one workspace panel, not worth a TTLCache
+# entry.
+@app.get("/documents/templates", response_model=List[DocumentListOut])
+def get_template_sample_documents(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    documents = (
+        db.query(Document)
+        .filter(Document.user_id == current_user.id, Document.source == "template_sample")
+        .order_by(Document.upload_date.desc())
+        .all()
+    )
+    return [DocumentListOut.model_validate(doc) for doc in documents]
+
+
+@app.get("/documents/generated", response_model=List[DocumentListOut])
+def get_generated_documents(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    documents = (
+        db.query(Document)
+        .filter(Document.user_id == current_user.id, Document.source == "generated")
+        .order_by(Document.upload_date.desc())
+        .all()
+    )
+    return [DocumentListOut.model_validate(doc) for doc in documents]
 
 
 def _get_owned_document(db: Session, document_id: uuid.UUID, current_user: User) -> Document:

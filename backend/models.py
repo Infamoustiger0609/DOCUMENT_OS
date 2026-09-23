@@ -35,6 +35,16 @@ class Document(Base):
     error_message = Column(Text, nullable=True)
     classification_reasoning = Column(Text, nullable=True)
     classification_version = Column(Integer, nullable=True)
+    # Added in migration 0018 (see CLAUDE.md's "Document source separation"
+    # section) to distinguish an ordinary POST /documents/upload row from a
+    # template-learning sample (POST /templates/learn-from-sample) or a
+    # template-generated document (POST /templates/{id}/generate) — both of
+    # which are ordinary `documents` rows under the hood but must never show
+    # up in the main "My Documents" list. One of "upload" / "template_sample"
+    # / "generated". Python-side default covers every existing insert site
+    # that doesn't set it explicitly (i.e. the main upload endpoint); the two
+    # template endpoints set it explicitly to "template_sample"/"generated".
+    source = Column(Text, nullable=False, default="upload", server_default="upload", index=True)
     # Phase 32 (see CLAUDE.md's Document generation section) — set only on a
     # document produced by POST /templates/{id}/generate; the reverse link of
     # Template.created_from_document_id. Nullable, ON DELETE SET NULL:

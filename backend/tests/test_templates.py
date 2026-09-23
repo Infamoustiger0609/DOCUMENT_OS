@@ -176,10 +176,14 @@ def test_learn_from_sample_rejects_unsupported_category(client, auth_headers, st
     assert "Bank Statement" in resp.json()["detail"]
 
     # The sample document itself is still saved (a real, legitimate upload) —
-    # only template creation was refused.
-    docs = client.get("/documents", headers=auth_headers).json()
-    assert len(docs) == 1
-    assert docs[0]["category"] == "Bank Statement"
+    # only template creation was refused. It's a template-learning sample
+    # (source="template_sample"), so it's excluded from the main registry
+    # and only shows up via GET /documents/templates — see CLAUDE.md's
+    # "Document source separation" section.
+    assert client.get("/documents", headers=auth_headers).json() == []
+    sample_docs = client.get("/documents/templates", headers=auth_headers).json()
+    assert len(sample_docs) == 1
+    assert sample_docs[0]["category"] == "Bank Statement"
 
 
 def test_learn_from_sample_rejects_content_mismatch(client, auth_headers, storage_fake):

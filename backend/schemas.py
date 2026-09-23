@@ -23,6 +23,9 @@ class DocumentOut(BaseModel):
     # Phase 32 — see CLAUDE.md's Document generation section. Set only on a
     # document produced by POST /templates/{id}/generate.
     generated_from_template_id: Optional[uuid.UUID] = None
+    # "upload" / "template_sample" / "generated" — see CLAUDE.md's "Document
+    # source separation" section.
+    source: str = "upload"
 
 
 # Same as DocumentOut minus raw_text — used for list endpoints (GET /documents,
@@ -45,6 +48,11 @@ class DocumentListOut(BaseModel):
     error_message: Optional[str] = None
     classification_reasoning: Optional[str] = None
     classification_version: Optional[int] = None
+    # "upload" / "template_sample" / "generated" — see CLAUDE.md's "Document
+    # source separation" section. GET /documents already filters to "upload"
+    # server-side, but this is also reused (unfiltered) by GET /documents/templates
+    # and GET /documents/generated for the Editing Workspace's own two lists.
+    source: str = "upload"
 
 
 class DocumentUploadOut(BaseModel):
