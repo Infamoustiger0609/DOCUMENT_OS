@@ -7,6 +7,7 @@ endpoint takes its input file directly via multipart (rather than a separate
 upload-then-process step) and how output retention/cleanup works.
 """
 
+import asyncio
 import logging
 import uuid
 from pathlib import Path
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from auth import get_current_user
 from database import get_db
+from excel_tools import merge_excel
 from file_validation import matches_declared_type
 from image_tools import convert_image, resize_image
 from models import User
@@ -39,6 +41,7 @@ router = APIRouter(prefix="/tools", tags=["tools"])
 
 PDF_MIME = "application/pdf"
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 IMAGE_MIME_BY_TARGET = {"jpg": "image/jpeg", "png": "image/png", "tiff": "image/tiff"}
 
@@ -105,6 +108,46 @@ async def merge_pdf_endpoint(
         output_filename="merged.pdf",
         data=merged,
         mime_type=PDF_MIME,
+    )
+
+
+@router.post("/merge-excel", response_model=ToolFileOut)
+@limiter.limit(TOOLS_RATE_LIMIT, key_func=user_or_ip_key)
+async def merge_excel_endpoint(
+    request: Request,
+    response: Response,
+    files: List[UploadFile] = File(...),
+    mode: Literal["sheets", "concat"] = Form(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    cleanup_expired_tool_files(db)
+    if len(files) < 2:
+        raise HTTPException(status_code=400, detail="Provide at least 2 Excel files to merge.")
+
+    contents_list = []
+    filenames = []
+    for f in files:
+        extension = Path(f.filename or "").suffix.lower()
+        if extension != ".xlsx":
+            raise HTTPException(status_code=400, detail=f"{f.filename}: only .xlsx files can be merged.")
+        contents_list.append(await _read_validated_upload(f, ".xlsx", label=f.filename))
+        filenames.append(f.filename or "unnamed.xlsx")
+
+    try:
+        merged = merge_excel(contents_list, mode=mode, filenames=filenames)
+    except Exception:
+        logger.exception("Excel merge failed for user %s", current_user.id)
+        raise HTTPException(status_code=502, detail="Could not merge these Excel files.")
+
+    return save_tool_output(
+        db,
+        current_user,
+        tool_name="merge-excel",
+        original_filename=", ".join(filenames),
+        output_filename="merged.xlsx",
+        data=merged,
+        mime_type=XLSX_MIME,
     )
 
 
@@ -338,7 +381,10 @@ async def ocr_pdf_endpoint(
     contents = await _read_validated_upload(file, ".pdf")
 
     try:
-        searchable = ocr_pdf(contents, force_ocr=force_ocr)
+        # ocr_pdf() is a blocking, CPU-heavy call (Tesseract via ocrmypdf) —
+        # run it off the event loop so it can't freeze other requests this
+        # worker is handling while it runs.
+        searchable = await asyncio.to_thread(ocr_pdf, contents, force_ocr=force_ocr)
     except Exception:
         logger.exception("OCR failed for user %s", current_user.id)
         raise HTTPException(status_code=502, detail="Could not OCR this PDF.")

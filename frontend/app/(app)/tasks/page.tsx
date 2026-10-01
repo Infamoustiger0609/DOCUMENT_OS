@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
@@ -20,6 +20,25 @@ import {
 } from "../documents/types";
 
 const BUCKET_ORDER: DeadlineBucket[] = ["overdue", "due-this-week", "due-this-month"];
+
+// Mirrors GET /documents/deadlines's own `urgency` param exactly (see
+// CLAUDE.md's API endpoints section) — "all"/omitted means no server-side
+// urgency filter at all. Note: the backend's own "due-soon" value hardcodes
+// a 30-day window server-side, not this user's real due_soon_threshold_days
+// (CLAUDE.md flags this — no frontend page called it with a real value
+// before now) — so the "Due soon" tab may under-return relative to what the
+// client-side bucketing below would otherwise show for a threshold > 30 days.
+type UrgencyTab = "all" | "overdue" | "due-soon";
+
+const URGENCY_TABS: { value: UrgencyTab; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "overdue", label: "Overdue" },
+  { value: "due-soon", label: "Due soon" },
+];
+
+function isUrgencyTab(value: string | null): value is UrgencyTab {
+  return value === "overdue" || value === "due-soon" || value === "all";
+}
 
 function BucketSection({
   bucket,
@@ -65,16 +84,29 @@ function BucketSection({
 export default function TasksPage() {
   const { authFetch, user } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const thresholdDays = user?.due_soon_threshold_days ?? DEFAULT_DUE_SOON_THRESHOLD_DAYS;
+  const [urgency, setUrgencyState] = useState<UrgencyTab>(() => {
+    const param = searchParams.get("urgency");
+    return isUrgencyTab(param) ? param : "all";
+  });
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const setUrgency = useCallback(
+    (value: UrgencyTab) => {
+      setUrgencyState(value);
+      router.replace(value === "all" ? "/tasks" : `/tasks?urgency=${value}`);
+    },
+    [router]
+  );
 
   const loadDeadlines = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await authFetch("/documents/deadlines");
+      const res = await authFetch(`/documents/deadlines?urgency=${urgency}`);
       if (!res.ok) throw new Error("Failed to load deadlines");
       setDocuments(await res.json());
     } catch {
@@ -82,7 +114,7 @@ export default function TasksPage() {
     } finally {
       setLoading(false);
     }
-  }, [authFetch]);
+  }, [authFetch, urgency]);
 
   useEffect(() => {
     loadDeadlines();
@@ -105,6 +137,13 @@ export default function TasksPage() {
 
   const hasAnything = BUCKET_ORDER.some((bucket) => buckets[bucket].length > 0);
 
+  const emptyMessage =
+    urgency === "overdue"
+      ? "Nothing overdue."
+      : urgency === "due-soon"
+        ? "Nothing due soon."
+        : `Nothing due in the next ${thresholdDays} days.`;
+
   const openDocument = useCallback(
     (doc: DocumentRow) => router.push(`/documents/${doc.id}`),
     [router]
@@ -119,12 +158,28 @@ export default function TasksPage() {
         </p>
       </div>
 
+      <div className="flex w-fit gap-1 rounded-md border border-line bg-paper p-1">
+        {URGENCY_TABS.map((tab) => (
+          <button
+            key={tab.value}
+            type="button"
+            onClick={() => setUrgency(tab.value)}
+            className={cn(
+              "rounded px-3 py-1.5 text-sm transition-colors",
+              urgency === tab.value ? "bg-ink text-paper" : "text-ink-soft hover:bg-sidebar-bg"
+            )}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
       {error && <p className="text-sm text-overdue">{error}</p>}
 
       {loading ? (
         <p className="text-sm text-ink-soft">Loading deadlines...</p>
       ) : !hasAnything ? (
-        <p className="text-sm text-ink-soft">Nothing due in the next {thresholdDays} days.</p>
+        <p className="text-sm text-ink-soft">{emptyMessage}</p>
       ) : (
         <div className="flex flex-col gap-6">
           {BUCKET_ORDER.map((bucket) => (

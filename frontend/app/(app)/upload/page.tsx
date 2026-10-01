@@ -10,8 +10,15 @@ import { cn } from "@/lib/utils";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-const ALLOWED_EXTENSIONS = [".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff"];
+const ALLOWED_EXTENSIONS = [".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".xlsx"];
 const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
+
+// The backend is a single small Render instance — uploading an entire batch
+// at once would mean that many concurrent OCR/Groq pipelines competing for
+// it. This caps how many *uploads* (the XHR itself) run at once; once a
+// file's upload finishes, its poll loop runs independently and doesn't
+// count against this — polling is a cheap GET, not the expensive part.
+const MAX_CONCURRENT_UPLOADS = 2;
 
 // POST /documents/upload now returns as soon as the file is stored, before the
 // OCR/classify/extract pipeline runs (see CLAUDE.md's Background processing
@@ -22,13 +29,26 @@ const TERMINAL_STATUSES = ["processed", "extraction_failed", "classification_fai
 const POLL_INTERVAL_MS = 2000;
 const MAX_POLL_ATTEMPTS = 90; // ~3 minutes — well beyond any realistic OCR+Groq run
 
-type UploadState = "idle" | "uploading" | "processing" | "done" | "error";
+type EntryState = "queued" | "uploading" | "processing" | "done" | "error";
 type StepState = "pending" | "done" | "failed";
 
 interface UploadResult {
   status: string;
   category: string | null;
   error_message: string | null;
+}
+
+// One row per selected/dropped file, tracked independently of every other
+// row — a batch of files no longer shares a single page-wide upload state.
+interface UploadEntry {
+  id: string;
+  file: File;
+  state: EntryState;
+  progress: number;
+  message: string | null;
+  documentId: string | null;
+  result: UploadResult | null;
+  timedOut: boolean;
 }
 
 const STEPS = ["Extracted", "Classified", "Extracting fields", "Filed"] as const;
@@ -66,7 +86,7 @@ function getExtension(filename: string): string {
 
 function validateFile(file: File): string | null {
   if (!ALLOWED_EXTENSIONS.includes(getExtension(file.name))) {
-    return "Unsupported file type. Allowed: PDF, JPG, PNG, TIFF.";
+    return "Unsupported file type. Allowed: PDF, JPG, PNG, TIFF, Excel (.xlsx).";
   }
   if (file.size > MAX_FILE_SIZE_BYTES) {
     return "File exceeds the 20MB limit.";
@@ -74,11 +94,19 @@ function validateFile(file: File): string | null {
   return null;
 }
 
+function makeEntryId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 function PipelineStatusCard({
+  filename,
   result,
   polling,
   timedOut,
 }: {
+  filename: string;
   result: UploadResult;
   polling: boolean;
   timedOut: boolean;
@@ -87,10 +115,13 @@ function PipelineStatusCard({
 
   return (
     <Card className="flex flex-col gap-4 p-5">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-ink">Processing pipeline</h3>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-sm font-medium text-ink">Processing pipeline</h3>
+          <p className="truncate text-xs text-ink-soft">{filename}</p>
+        </div>
         {result.category && (
-          <span className="text-xs text-ink-soft">Classified as {result.category}</span>
+          <span className="shrink-0 text-xs text-ink-soft">Classified as {result.category}</span>
         )}
       </div>
       <div className="flex items-center">
@@ -139,166 +170,211 @@ function PipelineStatusCard({
 
 export default function UploadPage() {
   const { token, authFetch, logout } = useAuth();
-  const [state, setState] = useState<UploadState>("idle");
-  const [progress, setProgress] = useState(0);
-  const [message, setMessage] = useState<string | null>(null);
-  const [result, setResult] = useState<UploadResult | null>(null);
-  const [timedOut, setTimedOut] = useState(false);
+  const [entries, setEntries] = useState<UploadEntry[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const stopPolling = useCallback(() => {
-    if (pollTimeoutRef.current) {
-      clearTimeout(pollTimeoutRef.current);
-      pollTimeoutRef.current = null;
-    }
+  // Per-entry poll timers — a batch upload means several independent poll
+  // loops running at once, not just one.
+  const pollTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // The concurrency gate: files waiting for an upload slot, and how many
+  // uploads are currently in flight. Plain refs, not state — this is
+  // internal scheduling, not something the UI renders directly.
+  const uploadQueueRef = useRef<{ id: string; file: File }[]>([]);
+  const activeUploadsRef = useRef(0);
+
+  // Cancel every in-flight poll loop if the user navigates away mid-upload.
+  useEffect(() => {
+    const timeouts = pollTimeoutsRef.current;
+    return () => {
+      timeouts.forEach((t) => clearTimeout(t));
+      timeouts.clear();
+    };
   }, []);
 
-  // Cancel any in-flight poll loop if the user navigates away mid-upload.
-  useEffect(() => {
-    return () => stopPolling();
-  }, [stopPolling]);
+  const updateEntry = useCallback((id: string, patch: Partial<UploadEntry>) => {
+    setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)));
+  }, []);
 
   const pollDocumentStatus = useCallback(
-    (documentId: string, attempt: number) => {
+    (id: string, documentId: string, attempt: number) => {
       authFetch(`/documents/${documentId}`)
         .then((res) => {
           if (!res.ok) throw new Error("poll failed");
           return res.json();
         })
         .then((data: { status: string; category: string | null; error_message: string | null }) => {
-          setResult({ status: data.status, category: data.category, error_message: data.error_message });
+          updateEntry(id, {
+            result: { status: data.status, category: data.category, error_message: data.error_message },
+          });
 
           if (TERMINAL_STATUSES.includes(data.status)) {
-            setState("done");
+            updateEntry(id, { state: "done" });
             return;
           }
           if (attempt >= MAX_POLL_ATTEMPTS) {
-            setState("done");
-            setTimedOut(true);
+            updateEntry(id, { state: "done", timedOut: true });
             return;
           }
-          pollTimeoutRef.current = setTimeout(() => pollDocumentStatus(documentId, attempt + 1), POLL_INTERVAL_MS);
+          pollTimeoutsRef.current.set(
+            id,
+            setTimeout(() => pollDocumentStatus(id, documentId, attempt + 1), POLL_INTERVAL_MS)
+          );
         })
         .catch(() => {
           // A transient network hiccup shouldn't abandon the poll over
           // something that's likely still succeeding server-side — retry on
           // the same schedule instead of surfacing an error immediately.
           if (attempt >= MAX_POLL_ATTEMPTS) {
-            setState("done");
-            setTimedOut(true);
+            updateEntry(id, { state: "done", timedOut: true });
             return;
           }
-          pollTimeoutRef.current = setTimeout(() => pollDocumentStatus(documentId, attempt + 1), POLL_INTERVAL_MS);
+          pollTimeoutsRef.current.set(
+            id,
+            setTimeout(() => pollDocumentStatus(id, documentId, attempt + 1), POLL_INTERVAL_MS)
+          );
         });
     },
-    [authFetch]
+    [authFetch, updateEntry]
   );
 
-  const uploadFile = useCallback(
-    (file: File) => {
-      const validationError = validateFile(file);
-      if (validationError) {
-        setState("error");
-        setMessage(validationError);
-        setResult(null);
-        return;
-      }
-
-      stopPolling();
-      setState("uploading");
-      setProgress(0);
-      setMessage(null);
-      setResult(null);
-      setTimedOut(false);
-
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", `${API_URL}/documents/upload`);
-      if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
-
-      xhr.upload.onprogress = (event) => {
-        if (event.lengthComputable) {
-          setProgress(Math.round((event.loaded / event.total) * 100));
-        }
-      };
-
-      xhr.onload = () => {
-        if (xhr.status === 401) {
-          logout();
+  // Runs the actual XHR for one file. Resolves as soon as the upload itself
+  // settles (success or failure) — never waits for polling — so the
+  // concurrency gate below can immediately hand the freed slot to the next
+  // queued file instead of waiting out that file's whole pipeline run.
+  const runUpload = useCallback(
+    (id: string, file: File): Promise<void> => {
+      return new Promise((resolve) => {
+        const validationError = validateFile(file);
+        if (validationError) {
+          updateEntry(id, { state: "error", message: validationError });
+          resolve();
           return;
         }
 
-        let data: {
-          id?: string;
-          status?: string;
-          category?: string | null;
-          error_message?: string | null;
-          detail?: string;
-        } = {};
-        try {
-          data = JSON.parse(xhr.responseText);
-        } catch {
-          // ignore, fall through to status-code handling below
-        }
+        updateEntry(id, { state: "uploading", progress: 0, message: null });
 
-        if (xhr.status >= 200 && xhr.status < 300 && data.status && data.id) {
-          setResult({
-            status: data.status,
-            category: data.category ?? null,
-            error_message: data.error_message ?? null,
-          });
+        const formData = new FormData();
+        formData.append("file", file);
 
-          if (TERMINAL_STATUSES.includes(data.status)) {
-            setState("done");
-          } else {
-            setState("processing");
-            pollTimeoutRef.current = setTimeout(() => pollDocumentStatus(data.id!, 1), POLL_INTERVAL_MS);
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", `${API_URL}/documents/upload`);
+        if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            updateEntry(id, { progress: Math.round((event.loaded / event.total) * 100) });
           }
-        } else {
-          setState("error");
-          setMessage(data.detail ?? "Upload failed.");
-        }
-      };
+        };
 
-      xhr.onerror = () => {
-        setState("error");
-        setMessage("Upload failed. Could not reach the backend.");
-      };
+        xhr.onload = () => {
+          if (xhr.status === 401) {
+            logout();
+            resolve();
+            return;
+          }
 
-      xhr.send(formData);
+          let data: {
+            id?: string;
+            status?: string;
+            category?: string | null;
+            error_message?: string | null;
+            detail?: string;
+          } = {};
+          try {
+            data = JSON.parse(xhr.responseText);
+          } catch {
+            // ignore, fall through to status-code handling below
+          }
+
+          if (xhr.status >= 200 && xhr.status < 300 && data.status && data.id) {
+            const documentId = data.id;
+            const result: UploadResult = {
+              status: data.status,
+              category: data.category ?? null,
+              error_message: data.error_message ?? null,
+            };
+
+            if (TERMINAL_STATUSES.includes(data.status)) {
+              updateEntry(id, { state: "done", documentId, result });
+            } else {
+              updateEntry(id, { state: "processing", documentId, result });
+              pollTimeoutsRef.current.set(
+                id,
+                setTimeout(() => pollDocumentStatus(id, documentId, 1), POLL_INTERVAL_MS)
+              );
+            }
+          } else {
+            updateEntry(id, { state: "error", message: data.detail ?? "Upload failed." });
+          }
+          resolve();
+        };
+
+        xhr.onerror = () => {
+          updateEntry(id, { state: "error", message: "Upload failed. Could not reach the backend." });
+          resolve();
+        };
+
+        xhr.send(formData);
+      });
     },
-    [token, logout, pollDocumentStatus, stopPolling]
+    [token, logout, updateEntry, pollDocumentStatus]
+  );
+
+  const pump = useCallback(() => {
+    while (activeUploadsRef.current < MAX_CONCURRENT_UPLOADS && uploadQueueRef.current.length > 0) {
+      const next = uploadQueueRef.current.shift()!;
+      activeUploadsRef.current += 1;
+      runUpload(next.id, next.file).finally(() => {
+        activeUploadsRef.current -= 1;
+        pump();
+      });
+    }
+  }, [runUpload]);
+
+  const enqueueFiles = useCallback(
+    (files: File[]) => {
+      if (files.length === 0) return;
+      const newEntries: UploadEntry[] = files.map((file) => ({
+        id: makeEntryId(),
+        file,
+        state: "queued",
+        progress: 0,
+        message: null,
+        documentId: null,
+        result: null,
+        timedOut: false,
+      }));
+      setEntries((prev) => [...prev, ...newEntries]);
+      uploadQueueRef.current.push(...newEntries.map((e) => ({ id: e.id, file: e.file })));
+      pump();
+    },
+    [pump]
   );
 
   const handleDrop = useCallback(
     (event: DragEvent<HTMLDivElement>) => {
       event.preventDefault();
       setIsDragging(false);
-      const file = event.dataTransfer.files?.[0];
-      if (file) uploadFile(file);
+      enqueueFiles(Array.from(event.dataTransfer.files ?? []));
     },
-    [uploadFile]
+    [enqueueFiles]
   );
 
   const handleFileChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0];
-      if (file) uploadFile(file);
+      enqueueFiles(Array.from(event.target.files ?? []));
       event.target.value = "";
     },
-    [uploadFile]
+    [enqueueFiles]
   );
 
   return (
     <div className="flex flex-col gap-8 px-10 py-10">
       <div>
-        <h1 className="font-serif text-2xl font-semibold text-ink">Upload a document</h1>
+        <h1 className="font-serif text-2xl font-semibold text-ink">Upload documents</h1>
         <p className="mt-1 text-sm text-ink-soft">
-          It&apos;s read, sorted, and filed automatically — usually in under a minute
+          Each one is read, sorted, and filed automatically — usually in under a minute
         </p>
       </div>
 
@@ -317,15 +393,36 @@ export default function UploadPage() {
             onFileChange={handleFileChange}
           />
 
-          {state === "uploading" && <UploadProgressCard progress={progress} />}
+          {entries.map((entry) => (
+            <div key={entry.id}>
+              {entry.state === "queued" && (
+                <Card className="flex items-center justify-between gap-3 p-5">
+                  <span className="truncate text-sm text-ink">{entry.file.name}</span>
+                  <span className="shrink-0 text-xs text-ink-soft">Waiting to upload…</span>
+                </Card>
+              )}
 
-          {state === "error" && message && (
-            <p className="rounded-md bg-overdue/10 px-3 py-2 text-sm text-overdue">{message}</p>
-          )}
+              {entry.state === "uploading" && (
+                <UploadProgressCard progress={entry.progress} filename={entry.file.name} />
+              )}
 
-          {(state === "processing" || state === "done") && result && (
-            <PipelineStatusCard result={result} polling={state === "processing"} timedOut={timedOut} />
-          )}
+              {entry.state === "error" && entry.message && (
+                <p className="rounded-md bg-overdue/10 px-3 py-2 text-sm text-overdue">
+                  <span className="font-medium">{entry.file.name}: </span>
+                  {entry.message}
+                </p>
+              )}
+
+              {(entry.state === "processing" || entry.state === "done") && entry.result && (
+                <PipelineStatusCard
+                  filename={entry.file.name}
+                  result={entry.result}
+                  polling={entry.state === "processing"}
+                  timedOut={entry.timedOut}
+                />
+              )}
+            </div>
+          ))}
         </div>
 
         <div className="relative overflow-hidden rounded-lg bg-ink px-6 py-8">

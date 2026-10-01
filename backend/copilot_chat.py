@@ -22,6 +22,7 @@ duplication over an abstraction with only two call sites.
 import json
 import logging
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Dict, List
@@ -32,6 +33,7 @@ from sqlalchemy.orm import Session
 
 from classification import CATEGORIES
 from config import GROQ_API_KEY
+from data_query import DataQueryError, describe_tables, load_document_tables, run_readonly_sql
 from models import Document, User
 
 logger = logging.getLogger(__name__)
@@ -150,6 +152,39 @@ TOOL_DEFINITIONS = [
                 "type": "object",
                 "properties": {"query": {"type": "string", "description": "The word or phrase to search for."}},
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_data_files",
+            "description": (
+                "Run a read-only SQL SELECT query (DuckDB dialect) against the user's own "
+                "'Data File' documents — spreadsheets (.xlsx) uploaded to the registry. This "
+                "ONLY works for documents with category == 'Data File'; it has no idea about "
+                "the CONTENTS of an Invoice/Agreement/GST Document/etc. — for those, use "
+                "list_documents/get_document_count/search_document_text instead, never this "
+                "tool. Call this first with file_ids and no sql (or an empty sql) to see the "
+                "real table and column names before writing a query — table names look like "
+                "'<filename>_<sheetname>'. Then call it again with a real SQL SELECT using "
+                "those exact names. If the query fails, the real error is returned so you can "
+                "call this again with a corrected query."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Document id(s) of the Data File(s) to query (get these from list_documents).",
+                    },
+                    "sql": {
+                        "type": "string",
+                        "description": "A read-only SQL SELECT query. Omit or leave empty to just see the schema first.",
+                    },
+                },
+                "required": ["file_ids"],
             },
         },
     },
@@ -323,6 +358,60 @@ def _search_document_text(db: Session, user: User, args: Dict[str, Any]) -> Tool
     )
 
 
+def _query_data_files(db: Session, user: User, args: Dict[str, Any]) -> ToolRunResult:
+    file_ids_raw = args.get("file_ids") or []
+    if not file_ids_raw:
+        raise CopilotToolError("Provide at least one Data File document id in file_ids.")
+    try:
+        document_ids = [uuid.UUID(str(fid)) for fid in file_ids_raw]
+    except (ValueError, TypeError, AttributeError):
+        raise CopilotToolError("file_ids must be valid document ids.")
+
+    # load_document_tables re-verifies ownership and category == "Data File"
+    # itself (see data_query.py) — never trust the id list alone.
+    try:
+        con = load_document_tables(document_ids, user.id, db)
+    except DataQueryError as exc:
+        raise CopilotToolError(str(exc))
+
+    schema = describe_tables(con)
+    documents = (
+        db.query(Document).filter(Document.id.in_(document_ids), Document.user_id == user.id).all()
+    )
+
+    sql = (args.get("sql") or "").strip()
+    if not sql:
+        return ToolRunResult(
+            tool_name="query_data_files",
+            documents=documents,
+            content={
+                "schema": schema,
+                "note": "No SQL provided yet — call query_data_files again with a SELECT query using these real table/column names.",
+            },
+        )
+
+    try:
+        rows = run_readonly_sql(con, sql)
+    except DataQueryError as exc:
+        # Returned as this call's own (recoverable) result rather than raised
+        # — the model sees the real error and schema together and can retry
+        # with a corrected query in a later round, same "recoverable tool
+        # error" pattern every other tool here already uses. This naturally
+        # allows more than one retry within MAX_TOOL_ROUNDS, not just exactly
+        # one fixed retry.
+        return ToolRunResult(
+            tool_name="query_data_files",
+            documents=documents,
+            content={"schema": schema, "sql": sql, "error": str(exc)},
+        )
+
+    return ToolRunResult(
+        tool_name="query_data_files",
+        documents=documents,
+        content={"schema": schema, "sql": sql, "row_count": len(rows), "rows": rows},
+    )
+
+
 def _execute_tool(name: str, args: Dict[str, Any], db: Session, user: User) -> ToolRunResult:
     try:
         if name == "list_documents":
@@ -333,6 +422,8 @@ def _execute_tool(name: str, args: Dict[str, Any], db: Session, user: User) -> T
             return _get_deadline_summary(db, user)
         if name == "search_document_text":
             return _search_document_text(db, user, args)
+        if name == "query_data_files":
+            return _query_data_files(db, user, args)
         raise CopilotToolError(f"'{name}' isn't a tool I have available.")
     except CopilotToolError as exc:
         return ToolRunResult(tool_name=name, content={"error": str(exc)})

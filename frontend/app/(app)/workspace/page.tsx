@@ -5,6 +5,7 @@ import {
   ChevronUp,
   Combine,
   Download,
+  FileSpreadsheet,
   FileText,
   Image as ImageIcon,
   Maximize2,
@@ -45,8 +46,9 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 const PDF_EXT = ".pdf";
 const DOCX_EXT = ".docx";
+const XLSX_EXT = ".xlsx";
 const IMAGE_EXTS = [".jpg", ".jpeg", ".png", ".tif", ".tiff"] as const;
-const ALL_ALLOWED_EXTS = [PDF_EXT, DOCX_EXT, ...IMAGE_EXTS];
+const ALL_ALLOWED_EXTS = [PDF_EXT, DOCX_EXT, XLSX_EXT, ...IMAGE_EXTS];
 // Matches tools_router.TOOLS_MAX_FILE_SIZE_BYTES on the backend — larger than
 // the main pipeline's 20MB cap since compress-pdf specifically targets large files.
 const MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024;
@@ -112,7 +114,7 @@ const TOOL_RUN_LABELS: Record<string, string> = {
 const IDLE_RUN: RunState = { status: "idle", progress: 0, error: null, results: [] };
 
 const TOOLS: { key: ToolKey; label: string; icon: typeof Combine; description: string }[] = [
-  { key: "merge", label: "Merge", icon: Combine, description: "Combine 2 or more PDFs into one, in the order you choose." },
+  { key: "merge", label: "Merge", icon: Combine, description: "Combine 2 or more PDFs, or 2 or more Excel files, into one, in the order you choose." },
   { key: "split", label: "Split", icon: Scissors, description: "Split one PDF into individual pages, or by page range." },
   { key: "compress", label: "Compress", icon: Minimize2, description: "Shrink a PDF's file size." },
   { key: "convert", label: "Convert", icon: Repeat, description: "PDF ↔ DOCX, or between JPG/PNG/TIFF." },
@@ -136,7 +138,13 @@ function getExtension(filename: string): string {
 
 function isEligible(tool: ToolKey, filename: string): boolean {
   const ext = getExtension(filename);
-  if (tool === "merge" || tool === "split" || tool === "compress" || tool === "ocr") return ext === PDF_EXT;
+  // Merge accepts either PDFs or Excel files (see CLAUDE.md's Document tools
+  // section) — but never a mix in one run; once one type is selected, the
+  // other becomes ineligible too (enforced separately via mergeLockedExt in
+  // the component, not here — this function only knows about the tool, not
+  // the current selection).
+  if (tool === "merge") return ext === PDF_EXT || ext === XLSX_EXT;
+  if (tool === "split" || tool === "compress" || tool === "ocr") return ext === PDF_EXT;
   if (tool === "resize") return (IMAGE_EXTS as readonly string[]).includes(ext);
   return ext === PDF_EXT || ext === DOCX_EXT || (IMAGE_EXTS as readonly string[]).includes(ext);
 }
@@ -164,6 +172,9 @@ function FileTypeIcon({ filename }: { filename: string }) {
   const ext = getExtension(filename);
   if ((IMAGE_EXTS as readonly string[]).includes(ext)) {
     return <ImageIcon className="h-4 w-4 shrink-0 text-ink-soft" strokeWidth={1.75} />;
+  }
+  if (ext === XLSX_EXT) {
+    return <FileSpreadsheet className="h-4 w-4 shrink-0 text-ink-soft" strokeWidth={1.75} />;
   }
   return <FileText className="h-4 w-4 shrink-0 text-ink-soft" strokeWidth={1.75} />;
 }
@@ -386,6 +397,7 @@ export default function WorkspacePage() {
   const [tool, setTool] = useState<ToolKey>("merge");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
+  const [mergeExcelMode, setMergeExcelMode] = useState<"sheets" | "concat">("sheets");
   const [splitRanges, setSplitRanges] = useState("");
   const [quality, setQuality] = useState<"low" | "medium" | "high">("medium");
   const [targetFormat, setTargetFormat] = useState<ImageFormat>("jpg");
@@ -412,6 +424,14 @@ export default function WorkspacePage() {
   }, [tool]);
 
   const selectedFile = selectedIds.length > 0 ? files.find((f) => f.id === selectedIds[0]) ?? null : null;
+
+  // Merge accepts PDFs or Excel files, but never a mix in one run — once any
+  // file is selected for merge, the other type locks out (row-level eligibility
+  // below), and the option panel switches to the matching mode/copy.
+  const mergeLockedExt =
+    tool === "merge" && selectedIds.length > 0
+      ? getExtension(files.find((f) => f.id === selectedIds[0])?.file.name ?? "")
+      : null;
 
   // Keep the image-convert target format valid (never the source's own format).
   useEffect(() => {
@@ -489,11 +509,13 @@ export default function WorkspacePage() {
     let endpoint = "";
 
     if (tool === "merge") {
-      endpoint = "/tools/merge-pdf";
+      const isExcelMerge = mergeLockedExt === XLSX_EXT;
+      endpoint = isExcelMerge ? "/tools/merge-excel" : "/tools/merge-pdf";
       selectedIds.forEach((id) => {
         const f = files.find((x) => x.id === id);
         if (f) formData.append("files", f.file, f.file.name);
       });
+      if (isExcelMerge) formData.append("mode", mergeExcelMode);
     } else if (selectedFile) {
       formData.append("file", selectedFile.file, selectedFile.file.name);
 
@@ -651,7 +673,9 @@ export default function WorkspacePage() {
             </div>
             <div className="flex max-h-[480px] flex-col overflow-y-auto">
               {files.map((editorFile) => {
-                const eligible = isEligible(tool, editorFile.file.name);
+                const eligible =
+                  isEligible(tool, editorFile.file.name) &&
+                  (mergeLockedExt === null || getExtension(editorFile.file.name) === mergeLockedExt);
                 const isSelected = selectedIds.includes(editorFile.id);
                 const order = selectedIds.indexOf(editorFile.id) + 1;
                 const mode = SELECTION_MODE[tool];
@@ -726,7 +750,7 @@ export default function WorkspacePage() {
 
           <div className="flex flex-col gap-6">
             <Card className="flex flex-col gap-3 p-4">
-              <div className="grid grid-cols-6 gap-1.5">
+              <div className="grid grid-cols-3 gap-1.5">
                 {TOOLS.map((t) => {
                   const Icon = t.icon;
                   return (
@@ -735,7 +759,7 @@ export default function WorkspacePage() {
                       type="button"
                       onClick={() => setTool(t.key)}
                       className={cn(
-                        "flex flex-col items-center gap-1.5 rounded-md px-2 py-3 text-xs font-medium transition-colors",
+                        "flex min-w-0 flex-col items-center gap-1.5 rounded-md px-2 py-3 text-center text-xs font-medium leading-tight transition-colors",
                         tool === t.key ? "bg-ink text-paper" : "text-ink-soft hover:bg-sidebar-bg"
                       )}
                     >
@@ -750,11 +774,37 @@ export default function WorkspacePage() {
 
             <Card className="flex flex-col gap-4 p-5">
               {tool === "merge" && (
-                <p className="text-sm text-ink-soft">
-                  {selectedIds.length < 2
-                    ? "Select 2 or more PDFs on the left, in the order you want them merged."
-                    : `${selectedIds.length} PDFs selected — reorder with the arrows on the left.`}
-                </p>
+                <>
+                  <p className="text-sm text-ink-soft">
+                    {selectedIds.length < 2
+                      ? `Select 2 or more ${mergeLockedExt === XLSX_EXT ? "Excel files" : "PDFs"} on the left, in the order you want them merged.`
+                      : `${selectedIds.length} ${mergeLockedExt === XLSX_EXT ? "Excel files" : "PDFs"} selected — reorder with the arrows on the left.`}
+                  </p>
+                  {mergeLockedExt === XLSX_EXT && (
+                    <OptionRow label="Merge mode">
+                      <div className="flex w-fit gap-1 rounded-md border border-line bg-paper p-1">
+                        {(
+                          [
+                            { value: "sheets", label: "Keep as separate sheets" },
+                            { value: "concat", label: "Combine rows into one sheet" },
+                          ] as const
+                        ).map((m) => (
+                          <button
+                            key={m.value}
+                            type="button"
+                            onClick={() => setMergeExcelMode(m.value)}
+                            className={cn(
+                              "rounded px-3 py-1.5 text-sm transition-colors",
+                              mergeExcelMode === m.value ? "bg-ink text-paper" : "text-ink-soft hover:bg-sidebar-bg"
+                            )}
+                          >
+                            {m.label}
+                          </button>
+                        ))}
+                      </div>
+                    </OptionRow>
+                  )}
+                </>
               )}
 
               {tool === "split" && (

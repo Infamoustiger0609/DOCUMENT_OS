@@ -29,7 +29,7 @@ from auth import (
     verify_password,
 )
 from cache import TTLCache, deadlines_cache, documents_cache, invalidate_document_list_caches
-from chat import answer_question
+from chat import answer_question, answer_question_over_data
 from config import ALLOWED_ORIGINS
 from database import SessionLocal, get_db
 from error_tracking import init_error_tracking
@@ -138,6 +138,7 @@ ALLOWED_EXTENSIONS = {
     ".png": "image/png",
     ".tif": "image/tiff",
     ".tiff": "image/tiff",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
 MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
 
@@ -504,7 +505,7 @@ async def upload_document(
     if extension not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail="Unsupported file type. Allowed: PDF, JPG, PNG, TIFF.",
+            detail="Unsupported file type. Allowed: PDF, JPG, PNG, TIFF, XLSX.",
         )
 
     contents = await file.read()
@@ -517,7 +518,7 @@ async def upload_document(
             status_code=400,
             detail=(
                 "File content doesn't match its extension. Please upload a genuine "
-                "PDF, JPG, PNG, or TIFF file."
+                "PDF, JPG, PNG, TIFF, or XLSX file."
             ),
         )
 
@@ -604,14 +605,22 @@ def chat_with_document(
     document = _get_owned_document(db, document_id, current_user)
     if not payload.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
-    if not document.raw_text:
+    # A "Data File" document never has raw_text (see CLAUDE.md's Data Files
+    # section — its extracted_json is sheet metadata, not extracted text), so
+    # it's answered through a completely different path (answer_question_over_data,
+    # real SQL against the spreadsheet's own rows) that doesn't need raw_text
+    # at all. Every other category still needs it, same as before.
+    if not document.raw_text and document.category != "Data File":
         raise HTTPException(
             status_code=400,
             detail="This document has no extracted text to answer questions about yet.",
         )
 
     try:
-        answer, truncated = answer_question(document.raw_text, payload.question)
+        if document.category == "Data File":
+            answer, truncated = answer_question_over_data(document, payload.question, db)
+        else:
+            answer, truncated = answer_question(document.raw_text, payload.question)
     except Exception:
         logger.exception("Chat answer failed for document %s", document_id)
         raise HTTPException(

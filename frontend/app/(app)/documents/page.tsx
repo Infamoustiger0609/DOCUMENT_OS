@@ -2,7 +2,7 @@
 
 import { Search, Upload as UploadIcon } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { type MouseEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import { buttonVariants } from "@/components/ui/button";
@@ -44,14 +44,20 @@ function StatTile({
   );
 }
 
+// "" stands in for "All Documents" — the same empty-string-means-unfiltered
+// convention the `category` state (and the GET /documents query param it
+// drives) already used before this tab row existed.
+const CATEGORY_TABS = ["", ...CATEGORIES];
+
 export default function DocumentsPage() {
   const { authFetch, user } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const thresholdDays = user?.due_soon_threshold_days ?? DEFAULT_DUE_SOON_THRESHOLD_DAYS;
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [category, setCategory] = useState("");
+  const [category, setCategory] = useState(() => searchParams.get("category") ?? "");
   const [uploadDateFrom, setUploadDateFrom] = useState("");
   const [uploadDateTo, setUploadDateTo] = useState("");
   const [search, setSearch] = useState("");
@@ -164,23 +170,25 @@ export default function DocumentsPage() {
           <StatTile label="Filed" count={stats.filed} dotClass="bg-filed" valueClass="text-filed" />
         </div>
 
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-ink-soft">Category</label>
-            <select
-              value={category}
-              onChange={(event) => setCategory(event.target.value)}
-              className="h-10 rounded-md border border-line bg-paper-raised px-3 text-sm text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20"
+        <div className="flex flex-wrap gap-2">
+          {CATEGORY_TABS.map((cat) => (
+            <button
+              key={cat || "all"}
+              type="button"
+              onClick={() => setCategory(cat)}
+              className={cn(
+                "rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
+                category === cat
+                  ? "border-ink bg-ink text-paper"
+                  : "border-line bg-paper-raised text-ink-soft hover:bg-sidebar-bg"
+              )}
             >
-              <option value="">All categories</option>
-              {CATEGORIES.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </div>
+              {cat || "All Documents"}
+            </button>
+          ))}
+        </div>
 
+        <div className="flex flex-wrap items-end gap-3">
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-ink-soft">Uploaded from</label>
             <Input

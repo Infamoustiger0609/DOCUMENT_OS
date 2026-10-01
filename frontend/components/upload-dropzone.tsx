@@ -48,8 +48,8 @@ export function DropzoneBox({
         }}
       />
       <UploadCloud className="relative z-10 h-9 w-9 text-ink-soft" strokeWidth={1.5} />
-      <p className="relative z-10 text-sm text-ink">Drop a document, or browse your files</p>
-      <p className="relative z-10 text-xs text-muted">PDF, JPG, PNG, TIFF — up to 20MB</p>
+      <p className="relative z-10 text-sm text-ink">Drop documents, or browse your files</p>
+      <p className="relative z-10 text-xs text-muted">PDF, JPG, PNG, TIFF, XLSX — up to 20MB each</p>
       <Button
         type="button"
         variant="outline"
@@ -57,13 +57,14 @@ export function DropzoneBox({
         onClick={onChooseFile}
         disabled={!interactive}
       >
-        Choose file
+        Choose files
       </Button>
       {interactive && (
         <input
           ref={fileInputRef}
           type="file"
-          accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff"
+          multiple
+          accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.xlsx"
           className="hidden"
           onChange={onFileChange}
         />
@@ -72,9 +73,10 @@ export function DropzoneBox({
   );
 }
 
-export function UploadProgressCard({ progress }: { progress: number }) {
+export function UploadProgressCard({ progress, filename }: { progress: number; filename?: string }) {
   return (
     <Card className="flex flex-col gap-2 p-5">
+      {filename && <span className="truncate text-sm text-ink">{filename}</span>}
       <div className="h-2 w-full overflow-hidden rounded-full bg-sidebar-bg">
         <div className="h-full bg-ink transition-all" style={{ width: `${progress}%` }} />
       </div>

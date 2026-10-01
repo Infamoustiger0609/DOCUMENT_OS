@@ -37,5 +37,12 @@ def ocr_pdf(data: bytes, force_ocr: bool = False) -> bytes:
             force_ocr=force_ocr,
             skip_text=not force_ocr,
             progress_bar=False,
+            # jobs=1: no worker pool — ocrmypdf's default multiprocessing
+            # (one process per page/CPU) is the main memory driver on
+            # Render's small free-tier instance. optimize=1: the lightest
+            # post-OCR optimization level instead of the default 2, which
+            # would recompress every image again for marginal size gains.
+            jobs=1,
+            optimize=1,
         )
         return output_path.read_bytes()

@@ -4,6 +4,7 @@ import {
   FileCheck2,
   FileSignature,
   File as FileIcon,
+  FileSpreadsheet,
   Landmark,
   Receipt,
   type LucideIcon,
@@ -16,7 +17,13 @@ export type Category =
   | "GST Filing"
   | "Bank Statement"
   | "Purchase Order"
-  | "Other";
+  | "Other"
+  // .xlsx uploads (see CLAUDE.md's Data Files section) — never classified by
+  // the LLM pipeline, set directly from the file extension in
+  // processing.py. extracted_json is sheet metadata ({sheets: [...]}), not
+  // a fixed field schema, so it's rendered generically — see
+  // documents/[id]/page.tsx's ExtractedCards.
+  | "Data File";
 
 // Keep in sync with backend/classification.py's CURRENT_CLASSIFICATION_VERSION.
 // Used to decide whether an "Other"-classified document predates a category that
@@ -53,6 +60,7 @@ export const CATEGORIES: Category[] = [
   "Bank Statement",
   "Purchase Order",
   "Other",
+  "Data File",
 ];
 
 export const CATEGORY_ICONS: Record<string, LucideIcon> = {
@@ -63,6 +71,7 @@ export const CATEGORY_ICONS: Record<string, LucideIcon> = {
   "Bank Statement": Banknote,
   "Purchase Order": ClipboardList,
   Other: FileIcon,
+  "Data File": FileSpreadsheet,
 };
 
 export const FIELD_LABELS: Record<string, Record<string, string>> = {
@@ -287,7 +296,7 @@ export function formatDate(value: string | null): string {
   if (!value) return "—";
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  return parsed.toLocaleDateString("en-IN", { year: "numeric", month: "short", day: "numeric" });
 }
 
 export function formatRelativeDeadline(

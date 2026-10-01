@@ -30,20 +30,24 @@ function StatTile({
   count,
   dotClass,
   valueClass,
+  href,
 }: {
   label: string;
   count: number;
   dotClass: string;
   valueClass: string;
+  href: string;
 }) {
   return (
-    <Card className="flex flex-col gap-3 px-5 py-4">
-      <div className="flex items-center gap-2">
-        <span className={cn("h-2 w-2 rounded-full", dotClass)} />
-        <span className="text-xs font-medium uppercase tracking-wide text-ink-soft">{label}</span>
-      </div>
-      <span className={cn("font-serif text-3xl font-semibold tabular-nums", valueClass)}>{count}</span>
-    </Card>
+    <Link href={href} className="block">
+      <Card className="flex flex-col gap-3 px-5 py-4 transition-colors hover:bg-sidebar-bg/40">
+        <div className="flex items-center gap-2">
+          <span className={cn("h-2 w-2 rounded-full", dotClass)} />
+          <span className="text-xs font-medium uppercase tracking-wide text-ink-soft">{label}</span>
+        </div>
+        <span className={cn("font-serif text-3xl font-semibold tabular-nums", valueClass)}>{count}</span>
+      </Card>
+    </Link>
   );
 }
 
@@ -167,13 +171,26 @@ export default function HomePage() {
       ) : (
         <>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <StatTile label="Total documents" count={stats.total} dotClass="bg-ink-soft" valueClass="text-ink" />
-            <StatTile label="Overdue" count={stats.overdue} dotClass="bg-overdue" valueClass="text-overdue" />
+            <StatTile
+              label="Total documents"
+              count={stats.total}
+              dotClass="bg-ink-soft"
+              valueClass="text-ink"
+              href="/documents"
+            />
+            <StatTile
+              label="Overdue"
+              count={stats.overdue}
+              dotClass="bg-overdue"
+              valueClass="text-overdue"
+              href="/tasks?urgency=overdue"
+            />
             <StatTile
               label={`Due within ${thresholdDays} days`}
               count={stats.dueSoon}
               dotClass="bg-due-soon"
               valueClass="text-due-soon"
+              href="/tasks?urgency=due-soon"
             />
           </div>
 

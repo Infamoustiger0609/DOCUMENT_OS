@@ -4,6 +4,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from classification import CURRENT_CLASSIFICATION_VERSION, classify_text
+from excel_tools import extract_excel_metadata
 from extraction import extract_text
 from models import Document
 from storage import download_file_from_storage
@@ -79,6 +80,30 @@ def classify_and_structure(document: Document, db: Session) -> Document:
 
 def process_document(document: Document, db: Session) -> Document:
     extension = Path(document.storage_path).suffix.lower()
+
+    # Data Files (.xlsx) never go through OCR/classification/structured
+    # extraction at all — there's no raw text to classify, and the category
+    # is already known from the extension alone. Their "structured data" is
+    # sheet metadata (name/columns/row count), not a fixed per-category
+    # schema — see CLAUDE.md's Data Files section.
+    if extension == ".xlsx":
+        try:
+            file_bytes = download_file_from_storage(document.storage_path)
+            document.extracted_json = extract_excel_metadata(file_bytes)
+            document.category = "Data File"
+            document.status = "processed"
+            document.deadline_date = None
+            document.classification_version = None
+            document.error_message = None
+        except Exception:
+            logger.exception("Excel metadata extraction failed for document %s", document.id)
+            document.status = "extraction_failed"
+            document.error_message = EXTRACTION_FAILED_MESSAGE
+        db.add(document)
+        db.commit()
+        db.refresh(document)
+        return document
+
     try:
         file_bytes = download_file_from_storage(document.storage_path)
         document.raw_text = extract_text(file_bytes, extension)

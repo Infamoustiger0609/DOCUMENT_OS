@@ -13,6 +13,9 @@ MAGIC_SIGNATURES: dict[str, tuple[bytes, ...]] = {
     # so this only rules out non-ZIP content, not "a ZIP that happens not to be
     # a real .docx". Used by POST /tools/docx-to-pdf.
     ".docx": (b"PK\x03\x04",),
+    # .xlsx is also a ZIP archive under the hood (same caveat as .docx above).
+    # Used by POST /documents/upload and POST /tools/merge-excel.
+    ".xlsx": (b"PK\x03\x04",),
 }
 
 

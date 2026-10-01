@@ -235,6 +235,43 @@ function ExtractedCards({ doc }: { doc: DocumentRow }) {
     return <GeneratedDocumentCards extracted={extracted} />;
   }
 
+  // A "Data File" (.xlsx upload — see CLAUDE.md's Data Files section) is
+  // never classified or structurally extracted like an Agreement/Invoice —
+  // extracted_json is just {sheets: [{name, columns, row_count}]}, so it
+  // gets its own generic per-sheet rendering instead of routing through
+  // FIELD_SECTIONS/FIELD_LABELS (which only cover the fixed categories).
+  if (doc.category === "Data File") {
+    const sheets = Array.isArray(extracted.sheets)
+      ? (extracted.sheets as { name: string; columns: string[]; row_count: number }[])
+      : [];
+    if (sheets.length === 0) {
+      return (
+        <DetailCard title="Spreadsheet contents">
+          <p className="pt-2 text-sm text-ink-soft">No sheets found in this file.</p>
+        </DetailCard>
+      );
+    }
+    return (
+      <>
+        {sheets.map((sheet) => (
+          <DetailCard key={sheet.name} title={sheet.name}>
+            <div className="pt-1">
+              <FieldRow label="Row count" value={sheet.row_count} numeric />
+              <div className="flex flex-col gap-1.5 border-b border-line py-2.5 last:border-b-0">
+                <span className="text-xs text-ink-soft">Columns ({sheet.columns.length})</span>
+                <ul className="list-disc space-y-1 pl-4 text-sm text-ink">
+                  {sheet.columns.map((column, index) => (
+                    <li key={index}>{column || "(unnamed)"}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </DetailCard>
+        ))}
+      </>
+    );
+  }
+
   const sections = doc.category ? FIELD_SECTIONS[doc.category] : undefined;
   const labels = doc.category ? FIELD_LABELS[doc.category] : undefined;
 
@@ -316,7 +353,7 @@ interface GeneratedSection {
 function formatGeneratedValue(value: unknown, type: string): string {
   if (value === null || value === undefined || value === "") return "—";
   if (type === "number" && typeof value === "number") {
-    return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
   return String(value);
 }
@@ -498,6 +535,12 @@ function ChatCard({ doc }: { doc: DocumentRow }) {
   const [question, setQuestion] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A "Data File" (.xlsx) document has no raw_text at all — see CLAUDE.md's
+  // Data Files section — but IS chattable via a completely different path
+  // (real SQL against its own rows, backend/chat.py's
+  // answer_question_over_data). Gating on raw_text alone would make that
+  // backend capability unreachable from the UI for every Data File.
+  const canChat = Boolean(doc.raw_text) || doc.category === "Data File";
 
   const handleSend = async (event: FormEvent) => {
     event.preventDefault();
@@ -541,8 +584,10 @@ function ChatCard({ doc }: { doc: DocumentRow }) {
       <div className="flex max-h-[50vh] flex-col gap-3 overflow-y-auto px-4 py-4">
         {messages.length === 0 ? (
           <p className="text-sm text-ink-soft">
-            {doc.raw_text
-              ? "Ask a question about this document's contents."
+            {canChat
+              ? doc.category === "Data File"
+                ? "Ask a question about this spreadsheet's data…"
+                : "Ask a question about this document's contents."
               : "This document has no extracted text yet, so there's nothing to ask about."}
           </p>
         ) : (
@@ -575,13 +620,13 @@ function ChatCard({ doc }: { doc: DocumentRow }) {
           placeholder="Ask a question about this document…"
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
-          disabled={sending || !doc.raw_text}
+          disabled={sending || !canChat}
           className="flex-1"
         />
         <Button
           type="submit"
           size="icon"
-          disabled={sending || !question.trim() || !doc.raw_text}
+          disabled={sending || !question.trim() || !canChat}
         >
           <Send className="h-4 w-4" strokeWidth={1.75} />
         </Button>
